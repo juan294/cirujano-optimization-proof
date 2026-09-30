@@ -1,0 +1,7 @@
+# Cirujano public optimization proof benchmark
+
+This owner-controlled non-production repository is a labeled pnpm/Vitest benchmark. It is not evidence of savings until the complete authorized live chain passes. Node 22.20.0, pnpm 10.11.0, frozen dependencies, 13 real tests and V8 coverage are fixed. Run `pnpm install --frozen-lockfile` then `pnpm test`. No sleeps or artificial timing are used.
+
+`main` is the comparison baseline ref; `develop` is the integration ref for the completed cache-only candidate. Neither deploys a product. The sole workflow triggers on develop pushes or explicit manual dispatch, with one read-only Ubuntu 24.04 job and a ten-minute limit. Main publication alone does not match its push trigger. No PR trigger, deployment workflow, Pages configuration or Vercel file is present. No develop push or workflow dispatch belongs to bootstrap authority.
+
+The reporter and controller are unchanged built Cirujano artifacts bound by reporter.json to their exact tool SHA and bundle digest. The same reporter/profile/commands are used for both variants. Raw local reports are ignored. Only an actual accepted Nemotron operation may add the two supported setup-node cache inputs. Preserve all failed attempts. An improvement requires three baseline and three candidate attempts including the cold candidate, unchanged quality, at least ten percent median whole-job improvement and at least one aggregate rounded minute saved. Otherwise report no-improvement.
