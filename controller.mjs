@@ -8240,7 +8240,7 @@ function ref(value) {
 function safeModel(value) {
   if (value === null)
     return "unavailable";
-  if (!/^nvidia\/[a-z0-9][a-z0-9._-]{0,127}$/.test(value))
+  if (!/^nvidia\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value))
     fail2("unsafe model identity");
   return value;
 }
@@ -15381,7 +15381,13 @@ function createSandboxClient(options) {
       if (controller.signal.aborted || now() >= deadline) throw new SandboxError("sandbox-deadline-exceeded");
     }
     async function bounded2(operation2) {
-      check();
+      try {
+        check();
+      } catch (error) {
+        void operation2.catch(() => {
+        });
+        throw error;
+      }
       return new Promise((resolve7, reject2) => {
         const abort = () => reject2(new SandboxError("sandbox-deadline-exceeded"));
         controller.signal.addEventListener("abort", abort, { once: true });
@@ -16478,7 +16484,7 @@ async function optionalJson(path2) {
 }
 async function moduleSourceIdentity() {
   const path2 = fileURLToPath(import.meta.url);
-  const toolSourceSha = "33d82a92188b2df6accb2bf7fe49d7f83d1603e6" ? "33d82a92188b2df6accb2bf7fe49d7f83d1603e6" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
+  const toolSourceSha = "41ddfe532242f87281f9c2ccdd26c7c0f061347a" ? "41ddfe532242f87281f9c2ccdd26c7c0f061347a" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
   return { toolSourceSha, bundleDigest: sha256(await readFile6(path2)) };
 }
 function createOptimizationService(options = {}) {
