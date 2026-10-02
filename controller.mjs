@@ -15301,6 +15301,13 @@ var STREAM_BYTES = 1024 * 1024;
 var OPERATION_BYTES = 32 * 1024 * 1024;
 var PAYLOAD_BYTES = 16 * 1024 * 1024;
 var REQUEST_BYTES = 24 * 1024 * 1024;
+var LINEAGE_STEPS = 64;
+function buildLineageValid(ids, importOperationId) {
+  return Array.isArray(ids) && ids.length <= LINEAGE_STEPS && ids.every((id2) => typeof id2 === "string" && UUID.test(id2) && id2 !== importOperationId) && new Set(ids).size === ids.length;
+}
+function imageReferenceValid(reference, ociDigest, built) {
+  return /^docker:\/\/[A-Za-z0-9./_:-]+(?:@sha256:[a-f0-9]{64})?$/.test(reference) && (reference.endsWith(`@sha256:${ociDigest}`) || built && !reference.includes("@"));
+}
 var states = ["PENDING", "ASSIGNED", "EXECUTING", "SUCCESS", "FAILED", "CANCELLED"];
 var SandboxError = class extends Error {
   constructor(code) {
@@ -15562,17 +15569,32 @@ function createSandboxClient(options) {
       const failure2 = (reasonCode) => ({ status: "failed", reasonCode, receipt: null, harnessBytes: null, manifestBytes: null });
       try {
         const image = profile.image;
-        if (!UUID.test(image.uuid) || !UUID.test(image.importOperationId) || ![image.ociDigest, image.harnessHash, image.manifestHash].every((value) => DIGEST.test(value)) || !image.registryReference.endsWith(`@sha256:${image.ociDigest}`) || !image.registryReference.startsWith("docker://") || /[\u0000-\u0020\u007f]/.test(image.registryReference) || image.registryReference.includes(options.iamToken)) return failure2("sandbox-image-profile-invalid");
+        if (!UUID.test(image.importOperationId) || !buildLineageValid(image.buildOperationIds, image.importOperationId)) return failure2("sandbox-image-profile-invalid");
+        const built = image.buildOperationIds.length > 0;
+        if (!UUID.test(image.uuid) || ![image.ociDigest, image.harnessHash, image.manifestHash].every((value) => DIGEST.test(value)) || !imageReferenceValid(image.registryReference, image.ociDigest, built) || /[\u0000-\u0020\u007f]/.test(image.registryReference) || image.registryReference.includes(options.iamToken)) return failure2("sandbox-image-profile-invalid");
         const registry = new URL(image.registryReference);
         if (registry.protocol !== "docker:" || !registry.hostname || registry.username || registry.password || registry.search || registry.hash) return failure2("sandbox-image-profile-invalid");
         const inspect2 = await ctx.request(`${SANDBOX_ORIGIN}${SANDBOX_PREFIX}inspect/${image.uuid}/`, "GET");
         if (inspect2.status !== 200) return failure2(`sandbox-image-http-${inspect2.status}`);
         const metadata = await ctx.json(inspect2, 65536);
-        if (metadata.uuid !== image.uuid || metadata.operation_uuid !== image.importOperationId) return failure2("sandbox-image-identity-mismatch");
+        const chain = [...image.buildOperationIds, image.importOperationId];
+        if (metadata.uuid !== image.uuid || metadata.operation_uuid !== chain[0]) return failure2("sandbox-image-identity-mismatch");
+        let current = image.uuid;
+        for (const [index, operationId] of image.buildOperationIds.entries()) {
+          const read = await ctx.request(operationUrl(operationId), "GET");
+          if (read.status !== 200) return failure2(`sandbox-build-http-${read.status}`);
+          const build = await ctx.json(read), buildMetadata = object2(build.metadata), state = object2(object2(buildMetadata.result).state);
+          if (build.uuid !== operationId || build.kind !== "instance" || build.status !== "SUCCESS" || build.result_image_uuid !== current || buildMetadata.disposable !== false || state.exit_code !== 0 || typeof build.image_uuid !== "string" || !UUID.test(build.image_uuid)) return failure2("sandbox-image-lineage-invalid");
+          current = build.image_uuid;
+          const parent = await ctx.request(`${SANDBOX_ORIGIN}${SANDBOX_PREFIX}inspect/${current}/`, "GET");
+          if (parent.status !== 200) return failure2(`sandbox-image-http-${parent.status}`);
+          const parentMetadata = await ctx.json(parent, 65536);
+          if (parentMetadata.uuid !== current || parentMetadata.operation_uuid !== chain[index + 1]) return failure2("sandbox-image-lineage-invalid");
+        }
         const imported = await ctx.request(operationUrl(image.importOperationId), "GET");
         if (imported.status !== 200) return failure2(`sandbox-import-http-${imported.status}`);
         const operation2 = await ctx.json(imported);
-        if (operation2.uuid !== image.importOperationId || operation2.kind !== "image_import" || operation2.status !== "SUCCESS" || object2(operation2.result).image !== image.uuid || object2(object2(operation2.metadata).registry).url !== image.registryReference) return failure2("sandbox-import-identity-mismatch");
+        if (operation2.uuid !== image.importOperationId || operation2.kind !== "image_import" || operation2.status !== "SUCCESS" || object2(operation2.result).image !== current || object2(object2(operation2.metadata).registry).url !== image.registryReference) return failure2("sandbox-import-identity-mismatch");
         const download = async (path2, maximum) => {
           const url = new URL(`${SANDBOX_ORIGIN}${SANDBOX_PREFIX}inspect/${image.uuid}/download`);
           url.searchParams.set("path", path2);
@@ -15582,7 +15604,7 @@ function createSandboxClient(options) {
         };
         const harnessBytes = await download("/opt/cirujano/harness.mjs", 512 * 1024), manifestBytes = await download("/opt/cirujano/image.json", 65536);
         if (sha256(harnessBytes) !== image.harnessHash || sha256(manifestBytes) !== image.manifestHash) return failure2("sandbox-image-bytes-mismatch");
-        return { status: "verified", reasonCode: "sandbox-image-readback-verified", receipt: { imageUuid: image.uuid, importOperationId: image.importOperationId, registryReference: image.registryReference, approvedOciDigest: image.ociDigest, harnessHash: image.harnessHash, manifestHash: image.manifestHash, readAt: new Date(now()).toISOString() }, harnessBytes, manifestBytes };
+        return { status: "verified", reasonCode: "sandbox-image-readback-verified", receipt: { imageUuid: image.uuid, importOperationId: image.importOperationId, buildOperationIds: [...image.buildOperationIds], registryReference: image.registryReference, approvedOciDigest: image.ociDigest, harnessHash: image.harnessHash, manifestHash: image.manifestHash, readAt: new Date(now()).toISOString() }, harnessBytes, manifestBytes };
       } catch (error) {
         return failure2(reason(error));
       } finally {
@@ -15619,8 +15641,8 @@ function decodeExecutionProfile(value) {
   decodeProvenance(p.provenance);
   decodeVerificationProfile(p.verificationProfile);
   decodeQualityEvidence(p.expectedQuality);
-  const image = exact(p.image, ["uuid", "ociDigest", "registryReference", "importOperationId", "recipeHash", "manifestHash", "dependencyStoreHash", "harnessHash"]);
-  if (p.schemaVersion !== 1 || p.kind !== "execution-profile" || !hash(p.proposalDigest) || !sha3(p.candidateSha) || p.candidateSha === p.provenance.baseSha || !bounded(p.candidateRepository) || !isAbsolute3(p.candidateRepository) || !bounded(p.project) || !uuid(image.uuid) || !uuid(image.importOperationId) || !["ociDigest", "recipeHash", "manifestHash", "dependencyStoreHash", "harnessHash"].every((key) => hash(image[key])) || !bounded(image.registryReference) || !/^docker:\/\/[A-Za-z0-9./_:-]+@sha256:[a-f0-9]{64}$/.test(String(image.registryReference)) || !String(image.registryReference).endsWith(`@sha256:${String(image.ociDigest)}`) || p.timeoutSeconds !== 600 || p.verificationProfile.timeoutSeconds !== 600 || !Number.isSafeInteger(p.maxLayerBytes) || p.maxLayerBytes < 1 || p.maxLayerBytes > 1024 * 1024 * 1024 || p.imageRetention !== "owner-retained") invalid5();
+  const image = exact(p.image, ["uuid", "ociDigest", "registryReference", "importOperationId", "buildOperationIds", "recipeHash", "manifestHash", "dependencyStoreHash", "harnessHash"]);
+  if (p.schemaVersion !== 1 || p.kind !== "execution-profile" || !hash(p.proposalDigest) || !sha3(p.candidateSha) || p.candidateSha === p.provenance.baseSha || !bounded(p.candidateRepository) || !isAbsolute3(p.candidateRepository) || !bounded(p.project) || !uuid(image.uuid) || !uuid(image.importOperationId) || !buildLineageValid(image.buildOperationIds, String(image.importOperationId)) || !["ociDigest", "recipeHash", "manifestHash", "dependencyStoreHash", "harnessHash"].every((key) => hash(image[key])) || !bounded(image.registryReference) || !imageReferenceValid(String(image.registryReference), String(image.ociDigest), image.buildOperationIds.length > 0) || p.timeoutSeconds !== 600 || p.verificationProfile.timeoutSeconds !== 600 || !Number.isSafeInteger(p.maxLayerBytes) || p.maxLayerBytes < 1 || p.maxLayerBytes > 1024 * 1024 * 1024 || p.imageRetention !== "owner-retained") invalid5();
   if (!p.verificationProfile.commands.every((argv) => ["pnpm", "node"].includes(argv[0]) && argv.every((arg) => bounded(arg) && !arg.includes("${{"))) || p.verificationProfile.commands.some((argv) => argv[0] === "pnpm" && ["install", "i"].includes(argv[1])) || !p.expectedQuality.tests.length || !p.expectedQuality.coverage.length || p.expectedQuality.tests.some((test) => test.outcome === "failed") || p.expectedQuality.commandDigest !== jsonDigest(completeCommands(p.verificationProfile))) invalid5();
   return p;
 }
@@ -15900,8 +15922,8 @@ async function readPair(directory) {
 }
 async function readBoundSandboxArtifact(path2, pair) {
   const sandbox = await readOptimizationArtifact("sandbox", path2);
-  const readback = exact2(await readPrivateJson(join10(dirname6(path2), "image-readback.json")), ["imageUuid", "importOperationId", "registryReference", "approvedOciDigest", "harnessHash", "manifestHash", "readAt"]);
-  if (readback.imageUuid !== pair.profile.image.uuid || readback.importOperationId !== pair.profile.image.importOperationId || readback.registryReference !== pair.profile.image.registryReference || readback.approvedOciDigest !== pair.profile.image.ociDigest || readback.harnessHash !== pair.profile.image.harnessHash || readback.manifestHash !== pair.profile.image.manifestHash || !Number.isFinite(Date.parse(String(readback.readAt))) || pair.journal.latestArtifact !== basename(path2) || pair.journal.artifactDigest !== jsonDigest(sandbox) || canonicalJson(sandbox) !== canonicalJson(artifactFor(pair))) throw new Error("sandbox-artifact-drift");
+  const readback = exact2(await readPrivateJson(join10(dirname6(path2), "image-readback.json")), ["imageUuid", "importOperationId", "buildOperationIds", "registryReference", "approvedOciDigest", "harnessHash", "manifestHash", "readAt"]);
+  if (readback.imageUuid !== pair.profile.image.uuid || readback.importOperationId !== pair.profile.image.importOperationId || canonicalJson(readback.buildOperationIds) !== canonicalJson(pair.profile.image.buildOperationIds) || readback.registryReference !== pair.profile.image.registryReference || readback.approvedOciDigest !== pair.profile.image.ociDigest || readback.harnessHash !== pair.profile.image.harnessHash || readback.manifestHash !== pair.profile.image.manifestHash || !Number.isFinite(Date.parse(String(readback.readAt))) || pair.journal.latestArtifact !== basename(path2) || pair.journal.artifactDigest !== jsonDigest(sandbox) || canonicalJson(sandbox) !== canonicalJson(artifactFor(pair))) throw new Error("sandbox-artifact-drift");
   return sandbox;
 }
 async function readSandboxContext(path2) {
@@ -16484,7 +16506,7 @@ async function optionalJson(path2) {
 }
 async function moduleSourceIdentity() {
   const path2 = fileURLToPath(import.meta.url);
-  const toolSourceSha = "41ddfe532242f87281f9c2ccdd26c7c0f061347a" ? "41ddfe532242f87281f9c2ccdd26c7c0f061347a" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
+  const toolSourceSha = "b4b8ff29588de97d76b1216d210cabedf7cb6e7c" ? "b4b8ff29588de97d76b1216d210cabedf7cb6e7c" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
   return { toolSourceSha, bundleDigest: sha256(await readFile6(path2)) };
 }
 function createOptimizationService(options = {}) {

@@ -7872,6 +7872,12 @@ function normalizeQualityReports(vitest, coverage, suppliedProfile, workspace) {
   return decodeQualityEvidence({ commandDigest: jsonDigest([["pnpm", "install", "--frozen-lockfile"], ...profile.commands]), tests, coverage: results });
 }
 
+// src/optimization/sandbox.ts
+var STREAM_BYTES = 1024 * 1024;
+var OPERATION_BYTES = 32 * 1024 * 1024;
+var PAYLOAD_BYTES = 16 * 1024 * 1024;
+var REQUEST_BYTES = 24 * 1024 * 1024;
+
 // src/optimization/execution-profile.ts
 function invalid() {
   throw new Error("unsupported-execution-profile");
@@ -8004,7 +8010,7 @@ async function git(workspace, args, limit = maximum) {
   return (await execute("git", ["--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C", workspace, ...args], { encoding: "buffer", timeout: 1e4, maxBuffer: limit, env: { PATH: process.env.PATH } })).stdout;
 }
 async function toolIdentity() {
-  if (true) return "41ddfe532242f87281f9c2ccdd26c7c0f061347a";
+  if (true) return "b4b8ff29588de97d76b1216d210cabedf7cb6e7c";
   return (await git(dirname(fileURLToPath(import.meta.url)), ["rev-parse", "HEAD"], 1024)).toString().trim();
 }
 function githubIdentity(env, workspace, c) {
