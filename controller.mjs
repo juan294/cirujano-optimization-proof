@@ -15364,14 +15364,16 @@ function unknown(reasonCode) {
 function reason(error) {
   return error instanceof SandboxError ? error.code : "sandbox-transport-failed";
 }
-var requestFields = ["command", "args", "image", "shell", "disposable", "preserve_env", "networking", "timeout", "truncate_output_at", "cwd", "uid", "resources_limits", "env", "stdin"];
-function previewSandboxRequest(payload, imageUuid, maxLayerBytes, authorityDigest = "0".repeat(64)) {
-  if (!UUID.test(imageUuid) || !Number.isSafeInteger(maxLayerBytes) || maxLayerBytes < 1 || maxLayerBytes > 1024 * 1024 * 1024 || !DIGEST.test(authorityDigest)) throw new SandboxError("sandbox-request-invalid");
+var requestFields = ["command", "args", "image", "shell", "disposable", "preserve_env", "networking", "timeout", "truncate_output_at", "cwd", "uid", "resources_limits", "env", "stdin", "files"];
+var PAYLOAD_PATH = "/tmp/cirujano-payload.json";
+function previewSandboxRequest(payload, imageUuid, maxLayerBytes, payloadFileUuid, authorityDigest = "0".repeat(64)) {
+  if (!UUID.test(imageUuid) || !UUID.test(payloadFileUuid) || !Number.isSafeInteger(maxLayerBytes) || maxLayerBytes < 1 || maxLayerBytes > 1024 * 1024 * 1024 || !DIGEST.test(authorityDigest)) throw new SandboxError("sandbox-request-invalid");
   const serialized = canonicalJson(payload);
   if (Buffer.byteLength(serialized) > PAYLOAD_BYTES) throw new SandboxError("sandbox-payload-invalid");
-  const body = canonicalJson({ command: "/usr/local/bin/node", args: ["/opt/cirujano/harness.mjs"], image: imageUuid, shell: false, disposable: true, preserve_env: false, networking: { enabled: false }, timeout: 600, truncate_output_at: STREAM_BYTES, cwd: "/workspace", uid: 0, resources_limits: { max_layer_bytes: maxLayerBytes }, env: { PNPM_CONFIG_OFFLINE: "true", PNPM_CONFIG_STORE_DIR: "/opt/cirujano/store", HOME: "/workspace/.home", PATH: "/usr/local/bin:/usr/bin:/bin", CI: "true", CIRUJANO_SANDBOX_AUTHORITY: authorityDigest }, stdin: { value: Buffer.from(serialized).toString("base64"), encoding: "base64", close: true } });
+  const payloadDigest = sha256(serialized);
+  const body = canonicalJson({ command: "/usr/local/bin/node", args: ["/opt/cirujano/harness.mjs", PAYLOAD_PATH], image: imageUuid, shell: false, disposable: true, preserve_env: false, networking: { enabled: false }, timeout: 600, truncate_output_at: STREAM_BYTES, cwd: "/workspace", uid: 0, resources_limits: { max_layer_bytes: maxLayerBytes }, env: { PNPM_CONFIG_OFFLINE: "true", PNPM_CONFIG_STORE_DIR: "/opt/cirujano/store", HOME: "/workspace/.home", PATH: "/usr/local/bin:/usr/bin:/bin", CI: "true", CIRUJANO_SANDBOX_AUTHORITY: authorityDigest, CIRUJANO_PAYLOAD_SHA256: payloadDigest }, stdin: { value: "", encoding: "ascii", close: true }, files: { [PAYLOAD_PATH]: { uuid: payloadFileUuid, mode: "0400", uid: 0, gid: 0 } } });
   if (Buffer.byteLength(body) > REQUEST_BYTES) throw new SandboxError("sandbox-request-too-large");
-  return { body, requestHash: sha256(body), payloadDigest: sha256(serialized) };
+  return { body, requestHash: sha256(body), payloadDigest };
 }
 function truncation(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -15406,9 +15408,9 @@ function createSandboxClient(options) {
         operation2.then(resolve7, reject2).finally(() => controller.signal.removeEventListener("abort", abort));
       });
     }
-    async function request(url, method, body) {
+    async function request(url, method, body, contentType = "application/json") {
       check();
-      const response = await bounded2(fetcher(url, { method, headers, ...body === void 0 ? {} : { body }, redirect: "error", signal: controller.signal }));
+      const response = await bounded2(fetcher(url, { method, headers: { ...headers, "Content-Type": contentType }, ...body === void 0 ? {} : { body }, redirect: "error", signal: controller.signal }));
       if (response.redirected) throw new SandboxError("sandbox-redirect-rejected");
       return response;
     }
@@ -15500,15 +15502,23 @@ function createSandboxClient(options) {
     return unknown("sandbox-poll-limit");
   }
   return {
-    async create(payload, imageUuid, maxLayerBytes, beforePost, onCreated) {
+    async create(payload, imageUuid, maxLayerBytes, beforePost, onCreated, beforeUpload = async () => {
+    }) {
       let sent = false, record8 = null;
       const ctx = context();
       try {
-        if (typeof beforePost !== "function" || typeof onCreated !== "function") throw new SandboxError("sandbox-request-invalid");
-        const { body, requestHash, payloadDigest } = previewSandboxRequest(payload, imageUuid, maxLayerBytes, options.authorityDigest);
-        if (canonicalJson(payload).includes(options.iamToken)) throw new SandboxError("sandbox-payload-invalid");
+        if (typeof beforePost !== "function" || typeof onCreated !== "function" || typeof beforeUpload !== "function") throw new SandboxError("sandbox-request-invalid");
+        const serialized = canonicalJson(payload);
+        if (Buffer.byteLength(serialized) > PAYLOAD_BYTES) throw new SandboxError("sandbox-payload-invalid");
+        if (serialized.includes(options.iamToken)) throw new SandboxError("sandbox-payload-invalid");
+        await ctx.bounded(beforeUpload(sha256(serialized)));
+        const uploaded = await ctx.request(`${SANDBOX_ORIGIN}${SANDBOX_PREFIX}files`, "POST", Buffer.from(serialized), "application/octet-stream");
+        if (uploaded.status !== 200 && uploaded.status !== 201) return { status: "failed", reasonCode: `sandbox-upload-http-${uploaded.status}`, record: null };
+        const file = await ctx.json(uploaded, 65536);
+        if (typeof file.uuid !== "string" || !UUID.test(file.uuid) || file.sha256 !== sha256(serialized) || file.size !== Buffer.byteLength(serialized)) throw new SandboxError("sandbox-upload-mismatch");
+        const { body, requestHash, payloadDigest } = previewSandboxRequest(payload, imageUuid, maxLayerBytes, file.uuid, options.authorityDigest);
         const createdAt = new Date(now()).toISOString();
-        await ctx.bounded(beforePost({ schemaVersion: 1, kind: "sandbox-intent", attemptId: jsonDigest({ requestHash, payloadDigest, imageUuid, project: options.project }), requestHash, payloadDigest, imageUuid, project: options.project, createdAt }));
+        await ctx.bounded(beforePost({ schemaVersion: 1, kind: "sandbox-intent", attemptId: jsonDigest({ requestHash, payloadDigest, imageUuid, project: options.project }), requestHash, payloadDigest, payloadFileUuid: file.uuid, imageUuid, project: options.project, createdAt }));
         ctx.check();
         sent = true;
         const response = await ctx.request(`${SANDBOX_ORIGIN}${SANDBOX_PREFIX}instances`, "POST", body);
@@ -15763,7 +15773,7 @@ function reject(reasonCode = "sandbox-evidence-rejected") {
   return { status: "rejected", reasonCode, artifactPath: null };
 }
 async function trustedHarnessHash() {
-  return true ? "38340b4d15edf20008ca1062e5fbf65522cbd319c9199ab63a10340db1623779" : sha256(await readFile(new URL("../../../../scripts/optimization/harness.mjs", import.meta.url)));
+  return true ? "73406128b6bb90472a594f527bbdeb3b8b4e7845a08936c8f4d933261c169b24" : sha256(await readFile(new URL("../../../../scripts/optimization/harness.mjs", import.meta.url)));
 }
 async function boundProfile(context, raw) {
   const profile = decodeExecutionProfile(raw);
@@ -15868,10 +15878,11 @@ async function verifyPair(proposalPath, profileRaw, permitRaw, output, options) 
         const created = await client.create(payload, pair.profile.image.uuid, pair.profile.maxLayerBytes, async (intent) => {
           row.intent = intent;
           await writeJournal(store, pair.journal, options);
-          await consumePermit({ kind: "sandbox", digest: jsonDigest(pair.permit), operation: jsonDigest({ permitDigest: jsonDigest(pair.permit), role: row.role, attemptId: intent.attemptId }), maximum: pair.permit.maxOperations, ...options.permitLedger ? { ledger: options.permitLedger } : {} });
         }, async (record8) => {
           row.record = record8;
           await writeJournal(store, pair.journal, options);
+        }, async (payloadDigest) => {
+          await consumePermit({ kind: "sandbox", digest: jsonDigest(pair.permit), operation: jsonDigest({ permitDigest: jsonDigest(pair.permit), role: row.role, payloadDigest }), maximum: pair.permit.maxOperations, ...options.permitLedger ? { ledger: options.permitLedger } : {} });
         });
         row.createStatus = created.status;
         await writeJournal(store, pair.journal, options);
@@ -15908,8 +15919,9 @@ async function readPair(directory) {
     const payload = payloads[i];
     if (!["intent", "created", "failed", "outcome-unknown"].includes(row.createStatus) || row.role !== payload.role || row.payloadDigest !== jsonDigest(payload) || typeof row.cancelRequested !== "boolean") throw new Error("sandbox-role-drift");
     if (row.intent) {
-      exact2(row.intent, ["schemaVersion", "kind", "attemptId", "requestHash", "payloadDigest", "imageUuid", "project", "createdAt"]);
-      const preview = previewSandboxRequest(payload, profile.image.uuid, profile.maxLayerBytes, jsonDigest(permit));
+      exact2(row.intent, ["schemaVersion", "kind", "attemptId", "requestHash", "payloadDigest", "payloadFileUuid", "imageUuid", "project", "createdAt"]);
+      if (typeof row.intent.payloadFileUuid !== "string") throw new Error("sandbox-intent-drift");
+      const preview = previewSandboxRequest(payload, profile.image.uuid, profile.maxLayerBytes, row.intent.payloadFileUuid, jsonDigest(permit));
       if (row.intent.schemaVersion !== 1 || row.intent.kind !== "sandbox-intent" || row.intent.requestHash !== preview.requestHash || row.intent.payloadDigest !== preview.payloadDigest || row.intent.imageUuid !== profile.image.uuid || row.intent.project !== profile.project || row.intent.attemptId !== jsonDigest({ requestHash: row.intent.requestHash, payloadDigest: row.intent.payloadDigest, imageUuid: profile.image.uuid, project: profile.project })) throw new Error("sandbox-intent-drift");
     }
     if (row.record) {
@@ -16511,7 +16523,7 @@ async function optionalJson(path2) {
 }
 async function moduleSourceIdentity() {
   const path2 = fileURLToPath(import.meta.url);
-  const toolSourceSha = "14f4c314ad202a59864e0e0fc17a296d7bef1ab0" ? "14f4c314ad202a59864e0e0fc17a296d7bef1ab0" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
+  const toolSourceSha = "cac8c616f47cacccafa92c59b0cc373040314e47" ? "cac8c616f47cacccafa92c59b0cc373040314e47" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
   return { toolSourceSha, bundleDigest: sha256(await readFile6(path2)) };
 }
 function createOptimizationService(options = {}) {
