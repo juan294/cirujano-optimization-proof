@@ -8010,7 +8010,7 @@ async function git(workspace, args, limit = maximum) {
   return (await execute("git", ["--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C", workspace, ...args], { encoding: "buffer", timeout: 1e4, maxBuffer: limit, env: { PATH: process.env.PATH } })).stdout;
 }
 async function toolIdentity() {
-  if (true) return "b4b8ff29588de97d76b1216d210cabedf7cb6e7c";
+  if (true) return "14f4c314ad202a59864e0e0fc17a296d7bef1ab0";
   return (await git(dirname(fileURLToPath(import.meta.url)), ["rev-parse", "HEAD"], 1024)).toString().trim();
 }
 function githubIdentity(env, workspace, c) {
