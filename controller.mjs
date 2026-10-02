@@ -15493,7 +15493,8 @@ function createSandboxClient(options) {
     try {
       const result = object2(metadata.result), state = object2(result.state), resources = result.resources === void 0 ? {} : object2(result.resources);
       if (resources.cost !== void 0 && resources.cost !== null) operation2.usage = { value: finite(resources.cost), unit: "undocumented-provider-unit", currency: null };
-      operation2.process = { exitCode: integer3(state.exit_code), signal: integer3(state.signal), timedOut: boolean2(state.timed_out), stopped: boolean2(state.stopped), continued: boolean2(state.continued), coreDump: boolean2(state.core_dump) };
+      const signal = integer3(state.signal);
+      operation2.process = { exitCode: integer3(state.exit_code), signal: signal === -1 ? 0 : signal, timedOut: boolean2(state.timed_out), stopped: boolean2(state.stopped), continued: boolean2(state.continued), coreDump: boolean2(state.core_dump) };
       if (operation2.process.exitCode !== 0 || operation2.process.signal !== 0 || operation2.process.timedOut || operation2.process.stopped || operation2.process.continued || operation2.process.coreDump) return failure("sandbox-process-failed", operation2);
       const stdout = stream(result.stdout), stderr = stream(result.stderr);
       operation2.stdoutHash = stdout.hash;
@@ -16538,7 +16539,7 @@ async function optionalJson(path2) {
 }
 async function moduleSourceIdentity() {
   const path2 = fileURLToPath(import.meta.url);
-  const toolSourceSha = "9dbdb6f013d44e8a0e75f44ca1ba250e5354439d" ? "9dbdb6f013d44e8a0e75f44ca1ba250e5354439d" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
+  const toolSourceSha = "fe879a65439f2d16d85453c1d816ba46ed9da9f3" ? "fe879a65439f2d16d85453c1d816ba46ed9da9f3" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
   return { toolSourceSha, bundleDigest: sha256(await readFile6(path2)) };
 }
 function createOptimizationService(options = {}) {
