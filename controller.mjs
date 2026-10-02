@@ -15371,7 +15371,7 @@ function previewSandboxRequest(payload, imageUuid, maxLayerBytes, payloadFileUui
   const serialized = canonicalJson(payload);
   if (Buffer.byteLength(serialized) > PAYLOAD_BYTES) throw new SandboxError("sandbox-payload-invalid");
   const payloadDigest = sha256(serialized);
-  const body = canonicalJson({ command: "/usr/local/bin/node", args: ["/opt/cirujano/harness.mjs", PAYLOAD_PATH], image: imageUuid, shell: false, disposable: true, preserve_env: false, networking: { enabled: false }, timeout: 600, truncate_output_at: STREAM_BYTES, cwd: "/workspace", uid: 0, resources_limits: { max_layer_bytes: maxLayerBytes }, env: { PNPM_CONFIG_OFFLINE: "true", PNPM_CONFIG_STORE_DIR: "/opt/cirujano/store", HOME: "/workspace/.home", PATH: "/usr/local/bin:/usr/bin:/bin", CI: "true", CIRUJANO_SANDBOX_AUTHORITY: authorityDigest, CIRUJANO_PAYLOAD_SHA256: payloadDigest }, stdin: { value: "", encoding: "ascii", close: true }, files: { [PAYLOAD_PATH]: { uuid: payloadFileUuid, mode: "0400", uid: 0, gid: 0 } } });
+  const body = canonicalJson({ command: "/usr/local/bin/node", args: ["/opt/cirujano/harness.mjs", PAYLOAD_PATH], image: imageUuid, shell: false, disposable: true, preserve_env: false, networking: { enabled: false }, timeout: 600, truncate_output_at: STREAM_BYTES, cwd: "/workspace", uid: 0, resources_limits: { max_layer_bytes: maxLayerBytes }, env: { npm_config_offline: "true", npm_config_store_dir: "/opt/cirujano/store", HOME: "/workspace/.home", PATH: "/usr/local/bin:/usr/bin:/bin", CI: "true", CIRUJANO_SANDBOX_AUTHORITY: authorityDigest, CIRUJANO_PAYLOAD_SHA256: payloadDigest }, stdin: { value: "", encoding: "ascii", close: true }, files: { [PAYLOAD_PATH]: { uuid: payloadFileUuid, mode: "0400", uid: 0, gid: 0 } } });
   if (Buffer.byteLength(body) > REQUEST_BYTES) throw new SandboxError("sandbox-request-too-large");
   return { body, requestHash: sha256(body), payloadDigest };
 }
@@ -15466,7 +15466,22 @@ function createSandboxClient(options) {
     if (requestFields.some((field) => !Object.hasOwn(metadata, field)) || sha256(canonicalJson(Object.fromEntries(requestFields.map((field) => [field, metadata[field]])))) !== record8.requestHash) return failure("sandbox-request-readback-mismatch");
     if (object2(metadata.env).CIRUJANO_SANDBOX_AUTHORITY !== (options.authorityDigest ?? "0".repeat(64))) return failure("sandbox-request-readback-mismatch");
     ctx.check();
-    const operation2 = { id: record8.id, status: raw.status, imageUuid: record8.imageUuid, project: options.project, disposable: true, process: null, usage: null, createdAt: raw.created_at === void 0 ? null : timestamp5(raw.created_at), providerDuration: raw.duration === void 0 || raw.duration === null ? null : finite(raw.duration), stdoutHash: null, stderrHash: null, stdoutTruncated: null, stderrTruncated: null };
+    const operation2 = {
+      id: record8.id,
+      status: raw.status,
+      imageUuid: record8.imageUuid,
+      project: options.project,
+      disposable: true,
+      process: null,
+      usage: null,
+      createdAt: raw.created_at === void 0 ? null : timestamp5(raw.created_at),
+      // The provider reports duration -1 until an operation finishes.
+      providerDuration: raw.duration === void 0 || raw.duration === null || raw.duration === -1 ? null : finite(raw.duration),
+      stdoutHash: null,
+      stderrHash: null,
+      stdoutTruncated: null,
+      stderrTruncated: null
+    };
     if (["SUCCESS", "FAILED", "CANCELLED"].includes(operation2.status) && metadata.result && typeof metadata.result === "object" && !Array.isArray(metadata.result)) {
       const result = metadata.result;
       operation2.stdoutTruncated = truncation(result.stdout);
@@ -15773,7 +15788,7 @@ function reject(reasonCode = "sandbox-evidence-rejected") {
   return { status: "rejected", reasonCode, artifactPath: null };
 }
 async function trustedHarnessHash() {
-  return true ? "73406128b6bb90472a594f527bbdeb3b8b4e7845a08936c8f4d933261c169b24" : sha256(await readFile(new URL("../../../../scripts/optimization/harness.mjs", import.meta.url)));
+  return true ? "a0079357399bdee4fdbca46f0810ff78cbfb62d670fc551d9fab2ebab6824c5f" : sha256(await readFile(new URL("../../../../scripts/optimization/harness.mjs", import.meta.url)));
 }
 async function boundProfile(context, raw) {
   const profile = decodeExecutionProfile(raw);
@@ -16523,7 +16538,7 @@ async function optionalJson(path2) {
 }
 async function moduleSourceIdentity() {
   const path2 = fileURLToPath(import.meta.url);
-  const toolSourceSha = "cac8c616f47cacccafa92c59b0cc373040314e47" ? "cac8c616f47cacccafa92c59b0cc373040314e47" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
+  const toolSourceSha = "6a3b646f375cdbfd29ad7726fb481374212d6161" ? "6a3b646f375cdbfd29ad7726fb481374212d6161" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
   return { toolSourceSha, bundleDigest: sha256(await readFile6(path2)) };
 }
 function createOptimizationService(options = {}) {
