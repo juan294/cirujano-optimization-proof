@@ -16538,7 +16538,7 @@ async function optionalJson(path2) {
 }
 async function moduleSourceIdentity() {
   const path2 = fileURLToPath(import.meta.url);
-  const toolSourceSha = "6a3b646f375cdbfd29ad7726fb481374212d6161" ? "6a3b646f375cdbfd29ad7726fb481374212d6161" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
+  const toolSourceSha = "9dbdb6f013d44e8a0e75f44ca1ba250e5354439d" ? "9dbdb6f013d44e8a0e75f44ca1ba250e5354439d" : (await promisify(execFileCallback)("git", ["-C", dirname10(path2), "rev-parse", "HEAD"], { encoding: "utf8", timeout: 1e4, maxBuffer: 1024 })).stdout.trim();
   return { toolSourceSha, bundleDigest: sha256(await readFile6(path2)) };
 }
 function createOptimizationService(options = {}) {
